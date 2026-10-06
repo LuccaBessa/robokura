@@ -1,7 +1,4 @@
-# AGENTS.md
-
-This file defines how coding agents should behave in this repository, and what the
-product is that they are changing.
+What the product is, and how a coding agent works in it.
 
 ## Priorities
 
@@ -10,333 +7,294 @@ product is that they are changing.
 3. Preserve user changes, never revert unrelated edits.
 4. Keep comments to a minimum.
 
-## Workflow
+## Words
 
-1. Read this file at task start. It says what the product is and what to do next.
-2. Everything runs through `cargo`. There is no task runner in this repository, so
-   there is no recipe to find first and no wrapper to keep in step with the crates.
-3. Before committing, always run `cargo fmt --all`, `cargo clippy --workspace
-   --all-targets`, and the checks for the code that was touched. Fix any failures.
-4. Anything that draws has a check that drives the same path a person does. See
-   "UI verification".
+- **Assistant**: what a person makes. A name, a title, a description, and the
+  agent it runs on. A record this product owns.
+- **Agent**: the program an assistant runs on, spoken to over the Agent Client
+  Protocol. It brings its own sign-in and its own files. This product owns none
+  of that, and an agent is never run as a command of this product's own.
+- **Thread**: the conversation one assistant holds with the person. Exactly one,
+  which the database enforces. No thread without an assistant, no second thread
+  under one.
+- **Message**: one thing in a thread. `Text` is something said. `Note` is a line
+  of progress, such as a tool call reporting what it is doing.
+- **Run**: the live connection to one assistant's agent, started when that
+  assistant is first spoken to. It holds the reply while the turn goes on.
+- **Turn**: one question and the reply it produces. A stopped turn keeps its row
+  unfinished, so it reads as cut off rather than complete.
+- **Probe**: a run belonging to no assistant, used once to ask an agent what it
+  can be set to. It has no thread, and it is let go after twenty seconds.
 
-## UI surfaces and crate boundaries
+## Crates
 
-Robokura has one user-facing surface, the window in the `robokura` crate. There is
-no second one to keep in step with it, and adding one is a product decision rather
-than a mirror of the first.
+`robokura` -> `robokura-core` -> `robokura-acp`, and no arrow points back.
 
-The parity rule here is between the window and the two crates that must not need
-one:
+**`robokura-acp`** speaks the Agent Client Protocol and owns the only Tokio
+runtime. It knows agents, sessions, and commands. It knows nothing about
+assistants or threads, and it never reaches an agent by running a command.
 
-- `robokura-core` and `robokura-acp` compile without GPUI Kit. That is the point of
-  the cut. Changing the store or a prompt must not rebuild the interface, and every
-  check in those two crates must stay runnable without a window.
-- Core raises plain changes. The interface turns them into a redraw. It does not
-  raise the component set's own event type, because that would put a window back
-  into code that has no business having one.
-- When a change in the window needs something from core that core cannot answer
-  without a component, the answer is not to import one. It is a finding, and it is
-  reported.
+**`robokura-core`** is everything that is not a window: the records, where they
+are kept, what an assistant is sent, and the agents those assistants run on. It
+compiles without GPUI Kit, and every check in it runs without a window. When it
+needs something the interface holds, that is a finding to report rather than a
+component to import.
 
-## Use the component set
+**`robokura`** is the window, the panes, and `main`. It draws and keeps nothing
+of its own.
 
-Every part of the interface is built from GPUI Kit components. A button is
-`Button`. A list of things is `List` or `SearchableList`. A message is `Message`.
-A title bar is `TitleBar`. An empty pane is `Empty`. The kit is already written,
-already handles the platform, and already looks like the rest of the product.
+Every source file opens with a `//!` header saying what it holds. Read that
+rather than a list of file names, which is wrong the day the next file is added.
 
-A hand-rolled `div` with a click handler on it is not a component, and it is not
-allowed. This applies to anything that behaves like a control: buttons, rows,
-fields, cards, headers, bars, badges, separators, menus.
+## What is kept
 
-Layout is not a component, so `div` and `h_flex` and `v_flex` are for arranging
-kit components, and for the surfaces between them. Where the kit and the design
-disagree on a number, change the number on the kit component rather than
-rebuilding the component to get the number.
+One SQLite file, found by `paths.rs` in the platform's own application data
+directory. Write-ahead logging on and foreign keys on, so deleting an assistant
+takes its thread with it. `assistants/<id>/` under the same root is also where
+that agent is started, so one assistant's files cannot be found by another's.
 
-Two things follow from this, and both were learned the hard way:
+The shape lives in migrations rather than in the file. A step is only ever added
+at the end of the migration list, each in its own transaction, and `user_version`
+is the position in that list. A message's place comes from `MAX(seq) + 1` and
+not from a clock, so a reply still arriving holds its place.
 
-- **A component that exists must be looked up before one is written.** The
-  components available are listed in the kit's `component` module. Read it rather
-  than working from memory of what a UI usually needs.
-- **Reimplementing a component inherits its bugs and loses its fixes.** A
-  hand-written title bar did not get the kit's caption buttons, its platform
-  handling, or its drag behaviour, and every one of those had to be rediscovered.
+## What a press does
 
-Where the kit genuinely cannot do something, that is a finding to raise, not a
-reason to build it. Say which component is missing and what it would have to do.
-The assistant's own pane is already one of these: the sidebar takes only menu
-items and the dock is a full panel system, so the pane is a column of kit
-components. That is a gap in the component set rather than a choice, and it is
-worth saying so rather than working around it quietly.
+1. The person's message is stored first, so it is on record even if nothing
+   answers.
+2. On the first turn only, the agent is started, and the purpose plus the history
+   so far go with it. A later message is the message alone, because the running
+   agent holds the rest.
+3. An empty reply row is stored before the agent begins, so a turn cut off leaves
+   a record of how far it got.
+4. A message arriving during a turn waits for it rather than racing it.
+5. One loop reads every running agent, fifty milliseconds while a reply is
+   arriving and a quarter of a second otherwise, and writes back on a two hundred
+   millisecond interval.
+6. A reply's row is closed only when the agent finished it. A stopped turn or an
+   agent that went away keeps its row unfinished. Anything still held is written
+   back on close.
 
-The components are listed at `https://gpui-kit.com/component/`. Check there
-before writing anything. Each page carries the import, the API, and worked
-examples, and it is faster and more reliable than reading the crate source to find
-out what already exists.
+Nothing in that path decides anything while drawing.
 
-## GPUI threading rules
+## Drawing
 
-- Treat the app, window, and entity context as the UI thread unless work has
-  explicitly been moved off it.
-- Be extremely careful not to block the UI thread with disk I/O, network I/O,
-  process start and wait, sleeps, folder removal, or CPU-heavy work. If it can
-  stall a frame, assume it is forbidden on the UI thread.
-- `App::spawn`, `Context::spawn`, and `AsyncWindowContext::spawn` run futures that
-  are polled on the main thread. Do not put blocking or CPU-intensive work directly
-  inside those futures.
-- Use `cx.background_spawn(...)` or `cx.background_executor()` for blocking or
-  CPU-heavy work. The foreground task starts it, awaits the result, then hops back
-  through `update(...)` to apply state.
-- To wrap a synchronous blocking call, move it into a background task. Do not await
-  it on the foreground one, and do not introduce Tokio outside `robokura-acp`: the
-  protocol client is the only thing in this repository that owns a runtime.
-- Render paths must be pure state reads. No filesystem work, no store queries, no
-  process work, and no expensive recomputation from a `render` method.
-- Event handlers and hot paths stay thin. `on_action`, subscriptions, listeners,
-  key handlers, and the polling loop start background work and return quickly rather
-  than doing the slow part inline.
-- Cache what is expensive to compute or load. If the interface needs it often,
-  compute it in the background, store it in state, and draw from the cached copy.
-  What the records say is not one of these: they are read on every redraw on
-  purpose, so the screen and the store cannot drift apart.
-- A background task that ends an agent must wait for the agent to have actually
-  gone before anything touches what it was using. `Session::stop` is that path, and
-  dropping a session is only the net under it.
-- When reviewing GPUI code, ask two questions every time: **could this block?** and
-  **could this run during render or another hot UI path?** If either answer is yes,
-  move it off the thread.
+Every control, row, field, card, header, bar, badge, separator, and menu is a
+component from GPUI Kit. A hand-rolled `div` with a click handler on it is not a
+component. `div` and `h_flex` and `v_flex` are for arranging kit components and
+for the surfaces between them. Where the kit and the design disagree on a number,
+change the number on the kit component.
+
+Look it up at `https://gpui-kit.com/component/` before writing one. Each page
+carries the import, the API, and worked examples. Reimplementing a component
+inherits its bugs and loses its fixes: a hand-written title bar did not get the
+kit's caption buttons, its platform handling, or its drag behaviour, and each
+had to be rediscovered.
+
+Where the kit genuinely cannot do something, that is a finding to raise, and the
+finding says which component is missing and what it would have to do. The
+assistant's own pane is already one: the sidebar takes only menu items and the
+dock is a full panel system, so the pane is a column of kit components.
+
+## Threading
+
+- The app, the window, and the entity context are the UI thread unless work was
+  moved off it. Blocking work goes to `cx.background_spawn` or
+  `cx.background_executor`, and a synchronous blocking call is moved into a
+  background task rather than awaited on the foreground one.
+- `App::spawn`, `Context::spawn`, and `AsyncWindowContext::spawn` are polled on
+  the main thread. Blocking or CPU-heavy work inside one is a dropped frame.
+- Render is a pure state read. No filesystem, no store query, no process, no
+  expensive recomputation.
+- Handlers stay thin. `on_action`, subscriptions, listeners, key handlers, and
+  the polling loop start background work and return.
+- Cache what is expensive to load or compute and draw from the copy. The records
+  are the exception: they are read on every redraw so the screen and the store
+  cannot drift apart.
+- A background task that ends an agent waits for the agent to have gone before
+  anything touches what it was using. `Session::stop` is that path and it blocks,
+  so it belongs on an action a person asked for rather than on a timer. Dropping
+  a session is only the net under it.
+- Never introduce Tokio outside `robokura-acp`.
+
+Two questions, every time: **could this block?** and **could this run during
+render?** If either is yes, it moves off the thread.
 
 ## Commands
 
-- Format: `cargo fmt --all`
-- Format check: `cargo fmt --all -- --check`
-- Lint: `cargo clippy --workspace --all-targets`
-- Test: `cargo test --workspace`
-- Run the app: `cargo run -p robokura`
-- Checks that need a real agent installed and signed in:
-  `cargo test -p robokura-core --test live -- --ignored --nocapture`
+- `cargo fmt --all`, checked with `-- --check`
+- `cargo clippy --workspace --all-targets`
+- `cargo test --workspace`, or `cargo test -p robokura-core` for a change in core
+  or the protocol client, which skips the GPUI tree and the slow part of a build
+- `cargo run -p robokura` for what a check cannot see
+- `cargo test -p robokura-core --test live -- --ignored --nocapture` for the
+  checks that need a real agent installed and signed in
 
 Diagnostics are off unless asked for, and go to stderr. `ROBOKURA_LOG` takes a
-filter, for instance `ROBOKURA_LOG=debug`.
+filter.
 
-## Rust rules
+## Rust
 
-- Do not use `unwrap()` or `expect()` in code that runs while a person is looking.
-  The one in `main.rs`, where the window could not be opened, is the exception,
-  because at that point there is no window to say it in.
-- Checks may use them freely. A scratch folder and an `expect` that names what was
-  being set up are what a check is for.
-- Errors are `robokura_core::Result` and `robokura_core::Error`. Use `?` and the
-  `From` impls rather than writing `map_err` by hand.
-- Error text is read by a person. `Error`'s `Display` says what happened in words
-  somebody can read, and keeps the underlying error for `source()` and the log.
-- Ids are `String`. Do not wrap an assistant, thread, or message id in a new type
-  without the user's decision, because the schema, the prompt, and the protocol all
-  carry them as text.
+- No `unwrap()` or `expect()` in code that runs while a person is looking.
+  `main.rs`, where the window could not be opened, is the exception, because
+  there is no window to say it in. Checks use them freely.
+- Errors are `robokura_core::Result` and `Error`. Use `?` and the `From` impls
+  rather than `map_err`. `Display` says what happened in words somebody can read
+  and keeps the underlying error for `source()` and the log.
 - Do not swallow a failure with `unwrap_or_default()` where the failure means the
   work did not happen. Say it with a typed error and let the window show it.
-- Keep modules focused and delete dead code instead of leaving it around.
-- **Never shell out to another program.** An agent is spoken to over the protocol,
-  not run as a command. There is no `Command::new` in this product.
+- Ids are `String`. Wrapping an assistant, thread, or message id in a new type is
+  the user's decision, because the schema, the prompt, and the protocol all
+  carry them as text.
+- **Never shell out.** An agent is spoken to over the protocol, not run as a
+  command. There is no `Command::new` in this product.
+- `pub(crate)` for anything shared inside a crate, and `lib.rs` re-exports what
+  the outside of a crate needs. Keep modules focused and source files under
+  roughly 500 lines. A type or a function exists in exactly one place, and
+  splitting a file keeps every field and method that was reachable before.
 
-## Code organization
-
-- Three crates, cut by whether the code needs a window to run. Keep the cut.
-- Split large files by domain. Keep source files under roughly 500 lines. The check
-  files are longer and that is fine.
-- Use `pub(crate)` for items shared within a crate. Apply it to fields, methods,
-  and free functions.
-- When code is extracted into a new file, every field and method that was reachable
-  before has to stay reachable, and the source file's `use` statements get cleaned
-  up.
-- A type or a function exists in exactly one place. Check both files when splitting.
-- `lib.rs` re-exports what the outside of a crate needs, so call sites stay short.
+A file is named for what it holds, and inside the window one is grouped into a
+folder named for the region it sits in, with that folder's `mod.rs` saying only
+what is in it. The file a component lives in is the only place that component is
+written.
 
 ## Comments
 
-Comments are kept to a minimum, and that is a ceiling rather than a target to fill.
-
 - A comment earns its place by saying something the code does not. If deleting it
   leaves the reader with the same understanding, delete it.
-- One line is the usual length. A second line is for the part that would not be
-  obvious, not for the first part repeated at greater length.
-- A doc comment on a public item says what the name does not. `write_body` does not
-  need a comment saying that it writes a body.
 - An inline comment explains why the line is there, or why it is not the obvious
-  thing. Delete any that narrates: "create the thread", "store the message", "now
-  render it".
-- Comments are for the things that are load-bearing. The permission request answered
-  without asking, the probe that is let go after twenty seconds, the retry in
-  `remove_folder`, and the migration that renames the tables all carry a reason a
-  reader would otherwise have to rediscover. Those keep their comments. Everything
-  else is shorter.
-- The voice is the one the crate already uses: plain, active, and about this product
-  rather than about Rust. No metaphor, and no second person in a source comment.
-- An assertion message in a check says why the claim matters, in one line. It is not
-  a second copy of the check's name.
-
-Roughly five per cent of the lines in `crates/` are comments. Treat going above that
-as something to take out, not something to add to.
+  thing. Delete any that narrates.
+- A doc comment on a public item says what the name does not.
+- The load-bearing ones stay, and they are the ones a reader would otherwise have
+  to rediscover. The retry in `remove_folder` and the shutdown in `Session::stop`
+  are the two that get tidied away by mistake.
+- Plain, active, and about this product rather than about Rust. No metaphor, no
+  second person. An assertion message in a check says why the claim matters, in
+  one line.
 
 ## Checks
 
-Checks live in their own files, never inside a source file.
+Checks live in `crates/<crate>/tests/<subject>.rs`. There is no `#[cfg(test)]
+mod` in `src/`, and no `#[test]` outside a `tests/` file. The file is named for
+the subject, not for the function, so the name survives a rename.
 
-- `crates/<crate>/tests/<subject>.rs` is where a check belongs. There is no
-  `#[cfg(test)] mod` in `src/`, and no `#[test]` outside a `tests/` file.
-- A source file holds the code it is about. A check about the row in a list goes in
-  `tests/rows.rs`, not at the bottom of the file that draws it.
-- The file is named for the subject, not for the function: `tests/window.rs`,
-  `tests/rows.rs`, `tests/settings.rs`, not `tests/when.rs`.
-- A check lives in the crate that owns the subject. A check that needs a window is in
-  `robokura`, and everything in `robokura-core` and `robokura-acp` has to stay
-  runnable without one.
-- A check may only reach what the crate makes public. If a check needs a field or a
-  function that is not reachable, that is a finding to report rather than something to
-  solve by widening the whole crate to `pub`.
-- The checks that start a real agent are in `tests/live.rs` and are `#[ignore]`d.
-  `cargo test` must never start one.
+Anything drawn belongs in `robokura/tests/window.rs`, unless the subject is a row
+(`sidebar_item.rs`), a colour (`theme.rs`), the settings page, the transcript, or
+how a time is said. Anything kept belongs in `robokura-core/tests/records.rs`,
+what the agent is sent in `prompts.rs`, and finding or starting an agent in
+`robokura-acp/tests/protocol.rs`. A new subject is a new file named for it.
+
+A check lives in the crate that owns the subject, and may only reach what that
+crate makes public. A check that needs a field the crate does not expose is a
+finding to report, not a reason to widen the crate to `pub`. The checks that start
+a real agent are in `robokura-core/tests/live.rs` and are `#[ignore]`d, so
+`cargo test` never starts one.
+
+Anything that draws gets a check that goes through the same path a person does,
+written as something a person can do and see. `tests/window.rs` opens a real
+window on a headless context over a store of its own, so a control, the bar's
+toggle, and a question asked are covered without a person present.
+
+Three things a check holds in place.
+
+- **No colour at a call site.** `themes/robokura.json` is the only place a hex
+  belongs. `tests/theme.rs` walks `src/` and fails on any other, and also on a
+  theme role that is read but not named or named but not read.
+- **No number in two files.** Every measurement two files must agree on is in
+  `ui/layout.rs`.
+- **No id twice, and no control without one.** Checks press by name, so a new
+  control carries an `.id`. Two elements on one id make a lookup ambiguous, which
+  is why the bar wraps its controls in a `drag_guard` with an id of its own. A row
+  names its parts `assistant-{id}-name`, `-when`, `-last`, `-initials`, and a
+  transcript row is `line-{index}`, because a row's own drawn state hangs off
+  that id.
+
+Run `cargo run -p robokura` for what a check cannot see: focus, the keyboard,
+drag, the platform's own window furniture, and how a pane sits against the bar. A
+check that finds an element is not the same as the layout being right.
 
 ## Features and dependencies
 
-- Every dependency version lives in the root `Cargo.toml` `[workspace.dependencies]`.
-  Subcrate `Cargo.toml` files use `{ workspace = true }`. Never hardcode a version
-  in a subcrate.
-- The only feature in use is `gpui-kit`'s `test-support`, and it is a
-  dev-dependency of `robokura`, so the headless window is not compiled into what a
-  person runs. Keep it that way. A test-only helper belongs in `dev-dependencies`.
-- New features use `dep:crate_name` syntax for optional dependencies, and
-  `#[cfg(feature = "...")]` on the module, on its `use`, and on every item that
-  names its types.
-- **A feature must never switch off one of the parts that are not negotiable.** No
-  build of this product may be a build where the credential boundary, the
-  isolation rule, or the rule that a person approves an irreversible action is
-  optional. A feature that seems to need that is a design question, not a feature,
-  and it goes to the user.
-- `[profile.dev]` strips debug info from dependencies because the GPUI dependency
-  tree is large. Do not undo that to make one build faster.
+Every dependency version lives in the root `Cargo.toml` under
+`[workspace.dependencies]`. Subcrates use `{ workspace = true }`.
 
-## Common mistakes to avoid
+The only feature in use is `gpui-kit`'s `test-support`, and it is a
+dev-dependency of `robokura`, so the headless window is not compiled into what a
+person runs. New features use `dep:crate_name` and `#[cfg(feature = "...")]` on
+the module, the `use`, and every item that names its types.
 
-- **Putting a window in `robokura-core` or `robokura-acp`.** Changing the store or
-  a prompt must not rebuild the interface, and a store change must stay checkable
-  without one. If the change seems to need a component, it is in the wrong crate.
-- **Walking a thread to find its newest message.** The list reads every row on
-  every redraw. `Store::previews` answers for all threads in one read and returns a
-  cut of the message. A loop over the threads is the slow version of something
-  already answered.
-- **Truncating twice.** A preview is already cut by `PREVIEW_CHARS`. Adding an
-  ellipsis in the row on top of it leaves the row showing nothing but the ellipsis.
-  Choose one layer, and put a check on the helper.
-- **Caching what the store should answer.** Records are read on every redraw so
-  that what is on screen and what is stored cannot drift apart. Cache what the
-  store does not already answer cheaply, not the records.
-- **Replacing the wording for a folder that will not go.** `Error::AgentStillRunning`
-  says an agent is still holding its own folder, because somebody removing an
-  assistant has no file in mind. The retry in `remove_folder` exists because an
-  agent that has just been asked to stop takes a moment to let go. Do not shorten
-  the wait, and do not surface the operating system's complaint instead.
-- **A check that starts a real agent without `#[ignore]`.** Those checks live in
-  `tests/live.rs`, need an agent installed and signed in, and are slow. `cargo test`
-  must never start one.
-- **Naming a check after the function it calls.** Checks are named for what has to
-  be true, so the name survives a rename.
+**A feature must never switch off one of the parts that are not negotiable.** No
+build of this product may be a build where the credential boundary is optional.
+That boundary is in force now: the agent keeps its own sign-in, nothing here
+holds a credential, and nothing advertises a client filesystem or terminal, so an
+agent has no route through this application to the person's files. Isolation, and
+a person's approval of an irreversible action, are deliberately absent from this
+version. A feature may not become the thing that switches either of them off when
+they arrive.
+
+`[profile.dev]` strips debug info from dependencies because the GPUI tree is
+large. Do not undo that to make one build faster.
+
+## Common mistakes
+
+- **Putting a window in core or the protocol client.** A store change must stay
+  checkable without one.
+- **Walking a thread to find its newest message.** `Store::previews` answers for
+  all threads in one read and returns a cut of the message.
+- **Truncating twice.** A preview is already cut by `PREVIEW_CHARS`, and the row
+  ellipsises what it is given.
+- **Caching what the store should answer.** Cache what the store does not already
+  answer cheaply. Not the records.
+- **Replacing the wording for a folder that will not go.**
+  `Error::AgentStillRunning` says an agent is still holding its own folder,
+  because somebody removing an assistant has no file in mind. The retry behind it
+  waits for an agent just asked to stop, and shortening that wait turns a stated
+  reason into the operating system's complaint.
+- **A check that starts a real agent without `#[ignore]`.**
+- **Naming a check after the function it calls.**
 - **Writing and publishing in one path.** They are separate steps and the second
-  one is asked for. There is no call that does both.
+  is asked for.
+
+Saying what went wrong has four paths, and each belongs to one place. The store
+would not open: `Middle::Complaint` in the middle of the window, with the list
+told too. Making an assistant failed: an `Alert` in the list. The agent would not
+start, or a turn failed: `Core::problem`, drawn as a `Line::Trouble`. Anything the
+interface can carry on with: `tracing::warn!`, and nothing on screen.
 
 ## Conventions
 
-- Prose follows the same rules as the rest of the project: active voice, short
-  sentences, no em-dashes, no metaphors, no second person. The top-level
-  `README.md` is customer-facing and may address the reader directly.
-- The product is described on its own terms. Do not build the argument by
-  contrasting it with another product, and do not name other products.
-- No due dates anywhere. Progress is measured by working steps.
-- No market, pricing, money, or competitive content in the README or anything said
-  about the product. A run is described by what it did and how long it took.
-  Nothing else.
+Prose follows the same rules: active voice, short sentences, no em-dashes, no
+metaphors, no second person. The top-level `README.md` is customer-facing and
+may address the reader directly. The product is described on its own terms, with
+no other product named and nothing said about market, pricing, money, or
+competition. A run is described by what it did and how long it took. No due dates
+anywhere; progress is measured by working steps.
 
-## Git rules
+No changelog file is tracked and none is generated. Release notes are written when
+a release is cut, and they say what changed for a person and what still cannot be
+done.
 
-- Treat `git status` and `git diff` as read-only context.
-- Do not run destructive git commands.
-- Do not amend commits unless explicitly asked.
-- Only create commits when the user asks.
-- Do not create GitHub issues, projects, or labels unless the user explicitly asks.
-  No tracker is to be added in their place.
-- There is no `Co-Authored-By` or AI attribution trailer unless the user asks for
-  one.
+## Git
 
-## Commit messages
+`git status` and `git diff` are read-only context, and no destructive commands
+run. Commits, pushes, issues, projects, and labels happen only when asked for. No
+`Co-Authored-By` or AI attribution trailer unless asked for one.
 
-- Prefer conventional commits when they fit:
-  `feat|fix|docs|refactor|test|chore(scope): summary`.
-- Use a real commit body for any non-trivial change. One-line commits are for
-  genuinely tiny edits only.
-- Structure commit messages like this:
-  1. Subject line: concise, imperative, and specific about the user-visible or
-     architectural change.
-  2. Blank line.
-  3. Body: short paragraphs or bullets explaining why the change was needed, what
-     changed, and any important constraints, follow-ups, or migrations.
-- Wrap commit message text. Keep the subject short, and wrap body lines to roughly
-  72 columns so `git log` and terminal tools stay readable.
-- The body should capture the reasoning that will matter in `git log` six months
-  later, not just restate the diff.
-- Call out behavior changes, fallback paths, performance work, or bug triggers
-  explicitly when they motivated the change.
-- If validation was important, mention the key checks in the body instead of making
-  reviewers guess.
-- Avoid useless subjects like `fix stuff`, `updates`, `wip`, or `misc cleanup`.
-
-## UI verification
-
-- Anything that draws gets a check that goes through the same path a person does.
-  `crates/robokura/tests/window.rs` opens a real window on a headless context over a
-  store of its own, so a control, the bar's toggle, and a question asked are all
-  covered without a person present.
-- A check is written as something a person can do and see, not as a statement about
-  the code. Name the thing that has to be true.
-- Run `cargo run -p robokura` for what a check cannot see: focus, the keyboard, drag,
-  the platform's own window furniture, and how a pane sits against the bar.
-- Look at the window rather than assuming. A check that finds an element is not the
-  same as the layout being right, and the bar's reserved width is worked out from
-  the component's own published height rather than written down, so it is worth
-  seeing once.
-
-## Changelog
-
-No changelog file is tracked and none is generated. Release notes are written when a
-release is cut.
-
-- Notes describe what changed for a person, in the voice of the README: what can now
-  be done, and what still cannot. Not the diff, and not the commit list.
-- What is deliberately not built is part of the notes. This product says plainly
-  what a version does not do.
-
-## Project structure
-
-| Crate | Description |
-|---|---|
-| `robokura-acp` | Speaks the Agent Client Protocol. Knows nothing about assistants or threads, and owns the only Tokio runtime |
-| `robokura-core` | The three records, the store, the prompt builder, one session per assistant. No interface code, ever |
-| `robokura` | The window, the panes, `main`. The only crate with an interface |
-
-An arrow points at what is depended on.
-
-```
-robokura  ->  robokura-core  ->  robokura-acp
-```
+Conventional commits where they fit: `feat|fix|docs|refactor|test|chore(scope):
+summary`. A real body for anything non-trivial, wrapped at about 72 columns,
+carrying the reasoning that will matter in `git log` six months later rather than
+restating the diff. Call out behaviour changes, fallback paths, performance work,
+and bug triggers when they motivated the change, and name the checks that
+validated it. One-line commits are for genuinely tiny edits.
 
 ## Ending a session
 
 1. Anything left over is said in the handoff, with what it would take. It is not
-   filed anywhere until the user says where it goes.
-2. Run `cargo fmt --all`, `cargo clippy --workspace --all-targets`, and the checks
-   for what changed.
-3. `git status` shows only what the task touched. Unrelated edits stay as they were.
-4. Commit and push only if the user asked for it. Nothing is pushed on a hunch.
+   filed anywhere until told where it goes.
+2. `cargo fmt --all`, `cargo clippy --workspace --all-targets`, and the checks for
+   what changed.
+3. `git status` shows only what the task touched. Unrelated edits stay as they
+   were.
+4. Commit and push only if asked for.
 5. Say what ran, what was checked, and what was not. A check that was not run is
    stated as not run.
