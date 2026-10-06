@@ -1,0 +1,15 @@
+[package]
+name = "robokura-acp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Robokura's client for the Agent Client Protocol"
+
+[lib]
+name = "robokura_acp"
+path = "src/lib.rs"
+
+[dependencies]
+agent-client-protocol.workspace = true
+tokio.workspace = true

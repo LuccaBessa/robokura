@@ -1,0 +1,30 @@
+[package]
+name = "robokura"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Personal assistants that run on your own computer"
+
+[lib]
+name = "robokura"
+path = "src/lib.rs"
+
+[[bin]]
+name = "robokura"
+path = "src/main.rs"
+
+[dependencies]
+chrono.workspace = true
+gpui-kit.workspace = true
+robokura-acp = { path = "../robokura-acp", version = "0.1.0" }
+robokura-core = { path = "../robokura-core", version = "0.1.0" }
+# The theme file is JSON and the component set reads it from there.
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# The headless window used to draw panes in checks. It is a dev-dependency so
+# the support code is not compiled into what a person runs.
+[dev-dependencies]
+gpui-kit = { workspace = true, features = ["test-support"] }

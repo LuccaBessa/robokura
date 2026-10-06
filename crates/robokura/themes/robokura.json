@@ -1,0 +1,191 @@
+{
+  "$schema": "https://github.com/longbridge/gpui-kit/raw/refs/heads/main/.theme-schema.json",
+  "name": "Slate",
+  "author": "Robokura",
+  "themes": [
+    {
+      "name": "Slate Light",
+      "mode": "light",
+      "radius": 6,
+      "radius.lg": 10,
+      "shadow": true,
+      "colors": {
+        "background": "#fcfcfc",
+        "foreground": "#0a0a0a",
+        "border": "#0000001a",
+        "ring": "#0062cc",
+        "caret": "#0a0a0a",
+        "link": "#0062cc",
+        "selection.background": "#0062cc4c",
+        "overlay": "#00000061",
+        "window.border": "#0000001a",
+
+        "sidebar.background": "#f4f3f1",
+        "sidebar.foreground": "#141414",
+        "sidebar.border": "#14141426",
+        "sidebar.accent.background": "#0a0a0a0e",
+        "sidebar.accent.foreground": "#141414",
+
+        "secondary.background": "#f4f3f1",
+        "secondary.foreground": "#00000059",
+
+        "muted.background": "#1010000a",
+        "muted.foreground": "#0000008c",
+
+        "accent.background": "#0000000d",
+        "accent.foreground": "#0a0a0a",
+
+        "primary.background": "#111110",
+        "primary.foreground": "#ffffff",
+
+        "input.border": "#0000001a",
+
+        "list.background": "#f4f3f1",
+        "list.active.background": "#0a0a0a0e",
+        "list.hover.background": "#0000000a",
+        "list.even.background": "#00000000",
+
+        "table.head.background": "#f4f3f1",
+        "table.head.foreground": "#0a0a0a",
+
+        "popover.background": "#ffffff",
+        "popover.foreground": "#0a0a0a",
+
+        "group_box.background": "#00000000",
+        "group_box.foreground": "#0a0a0a",
+
+        "button.background": "#f4f3f1",
+        "button.foreground": "#0a0a0a",
+        "button.hover.background": "#eceae7",
+        "button.active.background": "#e4e2df",
+
+        "button.primary.background": "#111110",
+        "button.primary.foreground": "#ffffff",
+        "button.primary.hover.background": "#2b2b2a",
+        "button.primary.active.background": "#2b2b2a",
+
+        "button.danger.background": "#c0362c",
+        "button.danger.foreground": "#ffffff",
+        "button.danger.hover.background": "#b03329",
+        "button.danger.active.background": "#b03329",
+
+        "danger.background": "#c0362c",
+        "danger.foreground": "#ffffff",
+
+        "success.background": "#1f8a65",
+        "success.foreground": "#ffffff",
+
+        "warning.background": "#b26a00",
+        "warning.foreground": "#ffffff",
+
+        "info.background": "#0062cc",
+        "info.foreground": "#ffffff",
+
+        "scrollbar.background": "#00000000",
+        "scrollbar.thumb.background": "#14141438",
+        "scrollbar.thumb.hover.background": "#14141447",
+
+        "title_bar.border": "#00000000",
+
+        "base.red": "#c0362c",
+        "base.green": "#1f8a65",
+        "base.blue": "#0062cc",
+        "base.yellow": "#b26a00",
+        "base.magenta": "#885cf5",
+        "base.cyan": "#00707c"
+      }
+    },
+    {
+      "name": "Slate Dark",
+      "mode": "dark",
+      "radius": 6,
+      "radius.lg": 10,
+      "shadow": true,
+      "colors": {
+        "background": "#1c1c1c",
+        "foreground": "#f2f2f2",
+        "border": "#ffffff1f",
+        "ring": "#64b5ff",
+        "caret": "#f2f2f2",
+        "link": "#64b5ff",
+        "selection.background": "#64b5ff4c",
+        "overlay": "#00000061",
+        "window.border": "#ffffff1f",
+
+        "sidebar.background": "#131313",
+        "sidebar.foreground": "#ffffffe6",
+        "sidebar.border": "#ffffff1f",
+        "sidebar.accent.background": "#ffffff13",
+        "sidebar.accent.foreground": "#ffffffe6",
+
+        "secondary.background": "#262626ad",
+        "secondary.foreground": "#ffffff5c",
+
+        "muted.background": "#ffffff0f",
+        "muted.foreground": "#ffffff94",
+
+        "accent.background": "#ffffff12",
+        "accent.foreground": "#f2f2f2",
+
+        "primary.background": "#ecece8",
+        "primary.foreground": "#141414",
+
+        "input.border": "#ffffff1f",
+
+        "list.background": "#131313",
+        "list.active.background": "#ffffff13",
+        "list.hover.background": "#ffffff0f",
+        "list.even.background": "#00000000",
+
+        "table.head.background": "#262626",
+        "table.head.foreground": "#f2f2f2",
+
+        "popover.background": "#262626ad",
+        "popover.foreground": "#f2f2f2",
+
+        "group_box.background": "#00000000",
+        "group_box.foreground": "#f2f2f2",
+
+        "button.background": "#262626",
+        "button.foreground": "#f2f2f2",
+        "button.hover.background": "#ffffff0f",
+        "button.active.background": "#ffffff1f",
+
+        "button.primary.background": "#f0f0f0",
+        "button.primary.foreground": "#141414",
+        "button.primary.hover.background": "#ffffff",
+        "button.primary.active.background": "#ffffff",
+
+        "button.danger.background": "#c93a2e",
+        "button.danger.foreground": "#ffffff",
+        "button.danger.hover.background": "#b33227",
+        "button.danger.active.background": "#b33227",
+
+        "danger.background": "#ff6b5e",
+        "danger.foreground": "#ffffff",
+
+        "success.background": "#4cc79b",
+        "success.foreground": "#ffffff",
+
+        "warning.background": "#e8a33d",
+        "warning.foreground": "#ffffff",
+
+        "info.background": "#64b5ff",
+        "info.foreground": "#ffffff",
+
+        "scrollbar.background": "#00000000",
+        "scrollbar.thumb.background": "#ffffff38",
+        "scrollbar.thumb.hover.background": "#ffffff47",
+
+        "title_bar.border": "#00000000",
+
+        "base.red": "#ff6b5e",
+        "base.green": "#4cc79b",
+        "base.blue": "#64b5ff",
+        "base.yellow": "#e8a33d",
+        "base.magenta": "#b6b3f9",
+        "base.cyan": "#9cedfa"
+      }
+    }
+  ]
+}
