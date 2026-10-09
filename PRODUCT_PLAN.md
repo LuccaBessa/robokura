@@ -187,7 +187,7 @@ Four hosts are in the initial release:
 | Host | Server start | Credential store |
 | --- | --- | --- |
 | macOS desktop | app-started | OS credential store |
-| Windows 11 desktop | app-started, gated on Spike 1 | OS credential store |
+| Windows 11 desktop | app-started, constrained rather than verified | OS credential store |
 | Linux VPS | guided installer → unprivileged systemd system service | systemd encrypted credentials |
 | Linux desktop | guided installer → unprivileged systemd system service | secret service (D-Bus) |
 
@@ -208,10 +208,11 @@ prerequisites is missing rather than reporting an undifferentiated failure. The
 alternative reading — Linux works out of the box — is not what this plan
 promises and must not be implied in the app or in packaging copy.
 
-Windows 11 desktop is listed but **gated**: Spike 1 measured a negative result
-on the only host available to measure it, and that host was below the documented
-OS floor. The gate stays closed until the spike is rerun on a Windows 11 24H2+
-build. See `SPIKES.md`.
+Windows 11 desktop is listed but **constrained rather than verified**: the
+native tier was measured once, on a host below the documented OS floor, and it
+granted the containing directory rather than the requested file. That is a
+known constraint to resolve while building `robokura-sandbox`, not a reason to
+defer planning. See "Known Windows constraint" in `SYSTEM_ARCHITECTURE.md`.
 
 The initial release excludes group chats and bot-to-bot conversations and
 handoffs, which follow the core workflow. Routines, connected services, the
@@ -1092,56 +1093,83 @@ instead of listing alternatives to be chosen between later.
    connection guidance. This is a first-release deliverable rather than
    follow-on documentation, because Linux is a first-release host.
 
-Three experiments gate the platform scope and run before the bulk of the
-implementation rather than alongside it, because their answers change which
-hosts ship:
+Three questions are recorded as **open, and they are resolved while building
+rather than before it**. They change what ships rather than whether to start, so
+the plan does not wait on them; each is written down next to the code that
+answers it:
 
 1. **Windows single-file grants.** Whether the Windows host can grant one
    individual file, read and write, without modifying host access control. No
    alternative avoids DACL mutation, so a negative answer removes Windows local
-   execution from the first release.
+   execution from the first release. This is answered by the first working
+   `robokura-sandbox` backend rather than by a design decision, and one
+   measurement already points at the negative. See "Known Windows constraint"
+   in `SYSTEM_ARCHITECTURE.md`.
 2. **The containment guardian.** Whether it can reap a child process that has
-   started its own session, on every supported host. This is the probe the whole
+   started its own session, on every supported host. This is what the
    revocation guarantee rests on, and on Linux it is also a deployment question,
    not only a code question: the cgroup v2 subtree the guardian drains must be
    **delegated and writable** by the server's service unit. A stock unit is not
    delegated, the drain primitive is unavailable, and there is no fallback that
-   catches a `setsid`-escaping descendant — so a host without delegation would
-   have to run without local execution at all. Confirming delegation early is
-   cheaper than discovering it during VPS packaging.
+   catches a `setsid`-escaping descendant - so a host without delegation would
+   have to run without local execution at all. This is the one open question
+   with a hard dependency on the Linux installer, which is why the installer is
+   step 7 rather than an afterthought.
 3. **The bootstrap channel on Windows.** Whether handle-list inheritance behaves
-   as designed, and specifically that a notifier spawned from the same window
+   as designed, and specifically that a notifier spawned in the same window
    cannot read the channel. The descriptor-3 convention is a hand-off across an
-   API that does not guarantee it, so it is verified rather than assumed.
+   API that does not guarantee it, so it is confirmed by an integration test
+   rather than assumed.
 
-The first two change which hosts ship and must precede implementation. The third
-is a correctness risk to a security boundary and should be closed before the
-first release build, though it does not by itself change platform scope.
+None of these is a reason to delay the server, core domain, or app. The sandbox
+crate is the only component whose design they change, and the server can be
+built and tested with a sandbox that refuses to launch, which is its own
+documented fail-closed behaviour.
 
 ## Decisions still open
 
-- Answer the Windows single-file grant question and set the first release
-  platform scope from the result.
-- Confirm cgroup v2 delegation for the server's service unit on **each Linux
-  image and each desktop distribution** intended for release, and validate the
-  containment guardian against a detached child on every host. Linux VPS and
-  Linux desktop need separate confirmation: the delegated-subtree requirement is
-  what forces the Linux server to be service-installed rather than app-started.
-- Confirm which Linux VPS images actually ship a systemd version at or above the
-  250 floor. Some long-term-support images do not, and the floor is a hard
-  prerequisite for credential storage rather than a preference.
-- Decide the update mechanism. The Linux server runs as a system service holding
-  the delegated cgroup and the server identity, so an update has a defined
-  relationship to that service; the docs currently state neither manual
-  re-install nor an in-app trigger.
-- Qualify each published agent and version for provider egress and for the
-  authentication flows usable on a headless server.
-- Validate the bootstrap channel's handle inheritance on each host.
-- Publish the verified capability matrix and error-code catalogue as reviewable
-  artifacts.
-- Add the paged owner notification list and an owner-set notification retention
-  bound; both are required by the notifier that ships in the first release.
-- Design the later-feature contracts the current schema must anticipate:
+None of these blocks drafting an implementation plan. They are listed because
+each one is a decision or a measurement that the implementation has to make,
+and writing them down here keeps them out of the code as undocumented
+assumptions.
+
+**Resolved while building, and worth knowing now:**
+
+- **Windows exact-file grants.** Whether the Windows host can grant one
+  individual file, read and write, without modifying host access control. One
+  measurement says no - see "Known Windows constraint" in
+  `SYSTEM_ARCHITECTURE.md`. A negative removes Windows local execution; there
+  is no alternative that avoids DACL mutation.
+- **Containment guardian against a detached child.** Whether it reaps a process
+  that has started its own session, on every host. On Linux this depends on a
+  **delegated and writable** cgroup v2 subtree, which is why the Linux server
+  must be service-installed rather than app-started.
+- **Which Linux images reach the systemd 250 floor**, and whether a vTPM-less
+  host may use a host-key-only credential policy or must be refused. The floor
+  is a hard prerequisite for credential storage, and refusing wholesale removes
+  Linux VPS support on the providers that do not expose one, which is most.
+- **Update mechanism.** The Linux server runs as a system service holding the
+  delegated cgroup and the server identity, so an update has a defined
+  relationship to that service. Manual re-install and an in-app trigger are both
+  unstated.
+- **Bootstrap channel on Windows.** Whether handle-list inheritance behaves as
+  designed, including that a notifier spawned in the same window cannot read
+  the channel.
+
+**Resolved per agent and version, during implementation:**
+
+- **Provider egress and auth flows.** Which agents reach their provider through
+  the constrained path, and which authentication flows are usable on a headless
+  server. Every agent starts `unqualified`, which is what lets the first run be
+  the experiment that answers this.
+
+**Still to be built:**
+
+- The paged owner notification list and an owner-set notification retention
+  bound. Both are required by the notifier that ships in the first release, and
+  neither is specified yet.
+- The verified capability matrix and the error-code catalogue, published as
+  reviewable artifacts rather than prose.
+- The later-feature contracts the current schema must anticipate:
   connected-service broker, routine missed-run and time-zone behavior, memory
   review, skill validation, and group-chat coordination.
-

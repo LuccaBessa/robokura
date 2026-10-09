@@ -2122,11 +2122,12 @@ the launch identity stub, and the probe suite, because tree termination, in-band
 identity verification, and the authoritative go/no-go decision are not delivered
 by any backend. Grant-target binding is documented as not race-free anywhere,
 with the worst case bounded to one unintended object. macOS keeps local
-execution with an explicitly narrowed claim and a `limited` status. Windows is
-gated on one decisive question answered by spike rather than assumption:
-whether the native no-DACL-mutation tier accepts a single-file grant. Since no
-alternative avoids host DACL mutation, a negative answer makes Windows a
-management-and-remote host.
+execution with an explicitly narrowed claim and a `limited` status. Windows
+carries one known constraint rather than an assumption: whether the native
+no-DACL-mutation tier accepts a single-file grant. One measurement says no, and
+since no alternative avoids host DACL mutation, a confirmed negative makes
+Windows a management-and-remote host. See "Open items for the implementation
+plan" and "Known Windows constraint" below.
 
 **Contracts, bootstrap channel, and storage recovery.** The bootstrap channel is
 an inherited anonymous handle, not a named channel, because nothing named can be
@@ -2163,39 +2164,75 @@ ACP session identifiers are excluded: a restored server must not answer a
 retried command from the previous server's outcome, and a session identifier is
 meaningless against a reinstalled agent.
 
-## Remaining design work
+## Open items for the implementation plan
 
-Items 1–4 below are **first-release blockers**: they are either empirical
-questions no amount of design resolves, or product decisions that change what
-ships. Items 5–8 are later work that does not block the initial slice.
+These are not blockers to drafting the plan. They are the decisions and
+measurements the implementation has to make, written down here so they do not
+become undocumented assumptions in the code. Each names the component that
+answers it.
 
-Items 1–4 below are **first-release blockers**: they are either empirical
-questions no amount of design resolves, or product decisions that change what
-ships. Items 5–8 are later work that does not block the initial slice.
+**Answered while building `robokura-sandbox`:**
 
-1. Answer the Windows exact-file grant question by spike on a supported host.
-   Spike 1 already measured a negative on a host **below** the OS floor, which
-   is evidence but not a decision.
-2. Confirm cgroup v2 **delegation** for the server's service unit on each
-   candidate Linux image *and* each candidate Linux desktop distribution, then
-   validate the containment guardian against a detached child. Delegation is a
-   v1 blocker twice over: an undelegated hierarchy has no fallback that catches
-   a `setsid()`-escaping descendant, and it is also what makes the Linux server
-   service-installed rather than app-started.
-3. Confirm the systemd floor on the Linux images intended for release, and
-   decide whether a vTPM-less host may use a host-key-only credential policy or
-   must be refused. Both are v1 prerequisites, because refusing removes Linux
-   VPS support on the providers that do not expose one.
-4. Validate the Windows bootstrap handle-list inheritance, including that a
-   notifier spawned in the same window cannot read the channel.
-5. Qualify egress per agent and version: determine which agents reach their
-   provider through the constrained path, and settle the `unqualified` first-run
-   rule that governs every agent before its first run has happened.
-6. Publish the verified capability matrix and the error-code catalogue as
+1. **Windows exact-file grants.** Whether the Windows host can grant one
+   individual file, read and write, without modifying host access control. One
+   measurement already points at the negative - see "Known Windows constraint"
+   below. A negative removes Windows local execution, since no alternative avoids
+   DACL mutation.
+2. **Containment guardian against a detached child.** Whether it reaps a process
+   that has started its own session, on every host. This is what the revocation
+   guarantee rests on, and on Linux it depends on a **delegated and writable**
+   cgroup v2 subtree. That dependency is also what forces the Linux server to be
+   service-installed rather than app-started, so it reaches the installer and the
+   app lifecycle, not only the sandbox.
+3. **Bootstrap handle-list inheritance on Windows.** Whether it behaves as
+   designed, including that a notifier spawned in the same window cannot read
+   the channel. The descriptor-3 convention is a hand-off across an API that
+   does not guarantee it, so it needs an integration test.
+
+**Answered while building the Linux installer:**
+
+4. **Which Linux images reach the systemd 250 floor**, and whether a vTPM-less
+   host may use a host-key-only credential policy or must be refused. Refusing
+   wholesale removes Linux VPS support on the providers that do not expose one,
+   which is most of them.
+5. **The update mechanism.** The Linux server runs as a system service holding
+   the delegated cgroup and the server identity, so an update has a defined
+   relationship to that service. Manual re-install and an in-app trigger are both
+   unstated.
+
+**Answered while running real agents:**
+
+6. **Provider egress and auth flows.** Which agents reach their provider through
+   the constrained path, and which authentication flows are usable on a headless
+   server. Every agent starts `unqualified`, which is what lets the first run be
+   the experiment that answers this.
+
+**Still to be built:**
+
+7. The paged owner notification list and the owner-set notification retention
+   bound, both of which the first-release notifier depends on.
+8. The verified capability matrix and the error-code catalogue, published as
    reviewable artifacts rather than prose.
-7. Add the paged owner notification list and the owner-set notification
-   retention bound, both of which the first-release notifier depends on.
-8. Design the later-feature contracts the current schema must anticipate:
+9. The later-feature contracts the current schema must anticipate:
    connected-service broker, routine missed-run and time-zone behavior, memory
    review, skill validation, and group-chat coordination.
 
+### Known Windows constraint
+
+The Windows ProcessContainer native tier was measured once, on a host **below**
+the documented OS floor: it reported a `base-container` tier with no DACL
+augmentation and host access-control lists unchanged, yet a single-file
+`readwritePaths` entry granted read and create access across the containing
+directory. The documented schema behaviour is the reason - a grant "applies to
+that directory and its descendants", and the field is a bare `Vec<String>` with
+no per-entry kind to distinguish a file from a directory.
+
+This is recorded as a constraint rather than a conclusion, for two reasons. It
+was measured on one host below the floor, so the tier question may behave
+differently on a supported build. And the negative consequence is already
+written: if a confirmed measurement repeats it, Windows local execution leaves
+the first release, because there is no alternative that avoids DACL mutation.
+
+The plan therefore carries Windows as **constrained rather than verified**, and
+`robokura-sandbox` should treat exact-file support on Windows as an open
+capability to be discovered at backend-build time, not as an available one.

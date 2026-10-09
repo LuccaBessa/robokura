@@ -175,16 +175,20 @@ Robokura product. It is separate from the product-scope plan.
   The schema default is `true`, and that default is precisely the host-DACL
   mutation this design forbids. Setting it explicitly is free and converts a
   silent downgrade into a loud refusal on hosts that need the Tier 3 fallback.
-- **Windows is decided by one spike, not by assumption.** The published schema
-  describes grants as a directory and its descendants, and the field is a bare
-  string list with no entry kind, so exact-file support under the native
-  no-DACL-mutation tier is undocumented and unproven. There is no alternative
-  that avoids host DACL mutation: AppContainer capabilities are a closed list,
-  code-integrity and application-control engines are signing and policy systems
-  rather than per-file grant mechanisms, and controlled-folder access is a block
-  list. If a single-file grant fails, Windows local bot execution is out of scope
-  for the first release and the server is management and remote only on that
-  host. The Windows host-preparation tool persists ACEs on the system volume,
+- **Windows exact-file support is a known constraint, not an assumption.** One
+  measurement of the native no-DACL-mutation tier produced the containing
+  directory rather than the requested file; see "Known Windows constraint" in
+  `SYSTEM_ARCHITECTURE.md`. The published schema describes grants as a directory
+  and its descendants, and the field is a bare string list with no entry kind,
+  which is the reason. There is no alternative that avoids host DACL mutation:
+  AppContainer capabilities are a closed list, code-integrity and
+  application-control engines are signing and policy systems rather than per-file
+  grant mechanisms, and controlled-folder access is a block list. If a confirmed
+  measurement repeats the result, Windows local bot execution is out of scope for
+  the first release and the server is management and remote only on that host.
+  `robokura-sandbox` should therefore treat exact-file support on Windows as a
+  capability to discover at backend-build time, not one to assume. The Windows
+  host-preparation tool persists ACEs on the system volume,
   rewrites device security descriptors at every boot, and requires elevation; it
   exists only to serve the forbidden tier, so it is never run.
 - macOS uses Seatbelt with direct egress denied and a server-managed loopback
@@ -513,12 +517,21 @@ sandbox crate.
 
 ## Decisions still open
 
-- Answer the Windows exact-file grant question by spike against the native
-  no-DACL-mutation tier, then set the first release platform scope.
-- Confirm cgroup v2 **delegation** for the server's service unit on every Linux
-  VPS image intended for release, and validate the containment guardian against
-  a detached child on each host. Together these are what the revocation
-  guarantee rests on; the second without the first is untestable in production.
+None of these blocks drafting an implementation plan. They are the decisions and
+measurements the implementation has to make; `SYSTEM_ARCHITECTURE.md` carries the
+same list under "Open items for the implementation plan", grouped by the
+component that answers each one.
+
+- **Windows exact-file grants.** One measurement of the native no-DACL-mutation
+  tier produced the containing directory rather than the requested file. Confirm
+  on a host at or above the documented OS floor, then set the first release
+  platform scope. See "Known Windows constraint" in `SYSTEM_ARCHITECTURE.md`.
+- **Cgroup v2 delegation and the containment guardian.** Confirm delegation for
+  the server's service unit on every Linux image intended for release, and
+  validate the guardian against a detached child on each host. Together these
+  are what the revocation guarantee rests on, and the second without the first
+  cannot be tested in production. Delegation is also what makes the Linux server
+  service-installed rather than app-started.
 - Validate the bootstrap channel's Windows handle-list inheritance, including
   that a notifier spawned in the same window cannot read the channel.
 - Qualify egress per agent and version: which agents reach their provider
