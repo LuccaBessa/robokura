@@ -132,28 +132,35 @@ designed.
 ## Proposed Rust boundaries
 
 ```text
-robokura-app      GPUI window and interaction
-robokura-client   HTTP, WebSocket, connection state, API client
-robokura-server   Server binary, API, authentication, startup and shutdown
-robokura-api      Shared versioned requests, responses, and events
-robokura-core     Product records, domain rules, persistence-facing services
-robokura-acp      ACP agent installation and session adapter
+robokura-app       GPUI window and interaction
+robokura-notifier  Companion process and OS notifications
+robokura-client    HTTP, WebSocket, connection state, API client
+robokura-server    Server binary, API, authentication, startup and shutdown
+robokura-api       Shared versioned requests, responses, and events
+robokura-core      Product records, domain rules, persistence-facing services
+robokura-acp       ACP agent installation and session adapter
+robokura-sandbox   Sandbox policy, per-host backend, containment, probes
 ```
 
 Dependency direction:
 
 ```text
 robokura-app → robokura-client
+robokura-notifier → robokura-client
 robokura-client → robokura-api
 robokura-server → robokura-api
 robokura-server → robokura-core
 robokura-server → robokura-acp → ACP
+robokura-server → robokura-sandbox
 ```
 
-The domain should not depend on GPUI, network transport, or ACP protocol types.
-The API crate carries transport-safe contracts, not domain behavior. The server
-joins domain services to ACP and network transport. The app draws server state
-and sends user actions; it does not own product records.
+The domain should not depend on GPUI, network transport, ACP protocol types, or
+the sandbox engine. The API crate carries transport-safe contracts, not domain
+behavior. The server joins domain services to ACP, the sandbox crate, and network
+transport. The app draws server state and sends user actions; it does not own
+product records. The sandbox crate is separate so the enforcement engine stays
+swappable and so the guarantees the product claims about isolation belong to
+one place rather than being assumed by the domain.
 
 ## Core bot workflow release scope
 
@@ -172,6 +179,39 @@ individual bots on a local or remote Robokura Server:
    owner-selected files or directories for the current task only; expire that
    grant on completion, cancellation, or failure. Require owner approval for
    high-impact actions.
+
+### First-release server hosts
+
+Four hosts are in the initial release:
+
+| Host | Server start | Credential store |
+| --- | --- | --- |
+| macOS desktop | app-started | OS credential store |
+| Windows 11 desktop | app-started, gated on Spike 1 | OS credential store |
+| Linux VPS | guided installer → unprivileged systemd system service | systemd encrypted credentials |
+| Linux desktop | guided installer → unprivileged systemd system service | secret service (D-Bus) |
+
+Linux VPS and Linux desktop are **same-operating-system, different-host** cases
+and must not share a code path by assumption. They differ in how the server is
+launched, which credential store is available, and which prerequisites are
+default-on versus default-off, so each has its own gate row and its own tested
+host list.
+
+**Linux is a prepared-host platform.** A stock Linux machine fails the sandbox
+gate, and this is expected rather than exceptional: Ubuntu 24.04 LTS restricts
+unprivileged user namespaces through AppArmor by default, and `bubblewrap`,
+`slirp4netns`, and the `iptables` front-end are not installed by default on
+either desktop or VPS images. "We support Linux" therefore means "we support
+documented, prepared hosts", and the owner-facing diagnose command and
+capability report are the mechanism that tells an owner exactly which of the
+prerequisites is missing rather than reporting an undifferentiated failure. The
+alternative reading — Linux works out of the box — is not what this plan
+promises and must not be implied in the app or in packaging copy.
+
+Windows 11 desktop is listed but **gated**: Spike 1 measured a negative result
+on the only host available to measure it, and that host was below the documented
+OS floor. The gate stays closed until the spike is rerun on a Windows 11 24H2+
+build. See `SPIKES.md`.
 
 The initial release excludes group chats and bot-to-bot conversations and
 handoffs, which follow the core workflow. Routines, connected services, the
@@ -198,7 +238,12 @@ release scope are later features, not first-release commitments.
 - Show server identity, health, version, and active work.
 - Manage owner authentication and connected app installations.
 - Keep one server owner while supporting the owner's multiple devices.
-- Deploy, configure, update, back up, restore, and diagnose a VPS server.
+- **Deploy, configure, and update a Linux host or VPS.** First release: a guided
+  installer that prepares the host and installs the server as an unprivileged
+  systemd service. **Back up, restore, and diagnose a VPS server.** Later
+  feature, as stated above; diagnostics still exist in the first release as the
+  owner-visible capability report and diagnose command, which is what an
+  unprepared Linux host needs most.
 
 ### ACP agent management
 
@@ -268,7 +313,7 @@ release scope are later features, not first-release commitments.
   explicit ownership rules.
 - Exclude agent-provider credentials from ordinary exports and define their
   treatment in backups.
-- Start the greenfield server with an empty store and no old-model migration.
+- Start the server with an empty store. The schema starts at version one.
 
 ### App experience
 
@@ -278,21 +323,56 @@ release scope are later features, not first-release commitments.
 - Close the window to the tray while keeping the local server running.
 - Let the owner explicitly shut down the local server from the tray.
 
-## Open product and implementation questions
+## Product and implementation questions
 
-- Which exact Linux distributions and macOS/Windows capability floors the
-  server will officially support. The current recommendation is runtime-gated
-  Bubblewrap on Linux, Seatbelt on macOS, and native BaseContainer/PSEC only on
-  Windows; unsupported hosts may manage bots and connect remotely but cannot
-  run them locally.
-- Whether the server-managed loopback proxy can enforce provider destinations
-  for every supported ACP agent and authentication flow under macOS Seatbelt.
-- Which computer capabilities each sandbox backend can enforce on each
-  supported host, including exact file grants and process-tree cleanup.
-- How browser automation, remote viewing, and host enforcement work technically.
-- How bots start bot-to-bot conversations after that feature is introduced.
+### Now decided
+
+- **Which computer capabilities each host can enforce.** Support is expressed as
+  a host profile, an enforcement backend, and runtime prerequisites, and the
+  normative statement is that a host may execute bots only when its runtime probe
+  passes. Distribution names appear only in a non-normative list of tested
+  images, because the same image behaves differently depending on whether a
+  namespace restriction is in force. Hosts that fail a required check manage and
+  pair but do not run bots, and the app says so rather than running a bot
+  without the boundary it claims.
+- **Whether the loopback proxy can enforce provider destinations.** Resolved
+  structurally: provider egress rests on a kernel-enforced deny with a single
+  loopback exception, so an agent that ignores proxy settings fails to reach its
+  provider rather than reaching the internet. What remains is per-agent
+  qualification, recorded per agent, version, and flow. An agent that cannot be
+  configured for the constrained path has that flow marked unavailable and its
+  runs refused; the sandbox policy is never widened to accommodate it.
+- **How browser automation and remote viewing work.** Browser control is out of
+  the first release; only the capability key ships, so the policy can express and
+  refuse a browser grant without ever silently widening it. There is deliberately
+  **no** browser probe: `unavailable` in the capability report means a baseline
+  check ran and failed, and a browser that was never built is not a check that
+  failed. The key is absent from the baseline checks entirely and only reachable
+  as a request-time capability refusal, which is what keeps `unknown` from ever
+  being able to mean "available". The browser runs outside the per-run sandbox
+  when it exists, because a persistent profile cannot coexist with a per-run
+  immutable filesystem policy.
+- **How bots start bot-to-bot conversations.** One stdio MCP server supplied to
+  the agent at session creation, which is the only tool transport the protocol
+  requires of every agent. Because it runs with a per-run token, the agent
+  cannot name its own identity and so cannot impersonate another bot, and a
+  handoff grants no capability and needs no approval.
+- **Which diagnostics the owner can inspect.** A server-side diagnose command and
+  an owner-visible capability report cover it. Support bundles include manifests,
+  host state, probe transcripts, and coded failures, and exclude credentials,
+  message text, workspace bytes, and host paths. Nothing is retained
+  automatically; the bundle exists where the owner asks for it.
+
+### Still open
+
 - Which server deployment and update paths the product supports.
-- Which diagnostics the owner can inspect when an agent or server fails.
+- Whether an agent's first run may proceed while `provider_path_verified` is
+  `unqualified`, and what the app discloses when it does. Qualification is
+  empirical and the first run is the experiment, so this must be decided before
+  any bot can start at all.
+- Whether the paged owner notification list and an owner-set notification
+  retention bound ship in the first release. The notifier's missed-notification
+  refresh depends on both, and `robokura-notifier` is a first-release crate.
 
 ## Computer model proposal
 
@@ -326,13 +406,20 @@ back. A group-chat participant receives no file access just because it can
 read the shared conversation; the owner must grant the path to the selected
 bot or bots.
 
-Define a work run as one bounded unit of execution, created by an owner message,
-a routine trigger, or a bot handoff. A group-chat message creates a coordinating
+Define a work run as one bounded unit of execution, created by an owner message, a
+routine trigger, or a bot handoff. A group-chat message creates a coordinating
 run; each participating bot gets its own child run. A handoff also creates a
 child run, and permissions do not transfer to the receiving bot. Runs move
 through queued, running, waiting-for-owner, and stopping states, then end as
 completed, canceled, or failed. A server restart continues the same run when
 safe.
+
+The coordinating run owns the turn budget, so the limit is global to the
+conversation rather than per bot. Every bot turn and every handoff increments it
+on the coordinating run, not on the child. At the limit the coordinating run
+pauses for the owner to extend it or end it; reaching the limit never
+auto-continues. The budget exists only where a coordinating run exists, so an
+ordinary owner-and-bot conversation is never subject to one.
 
 Treat ACP permission prompts as a separate interaction layer. They can explain
 an agent's requested action, but the sandbox and server policy enforce what the
@@ -342,6 +429,37 @@ capabilities because a filesystem boundary does not control them.
 Operating systems provide different isolation mechanisms and restrictions. The
 server must refuse to start a bot when enforced isolation is unavailable. It
 must never silently run without the boundary it claims to provide.
+
+### What the isolation does and does not promise
+
+Be precise with owners about what the boundary buys, because a guarantee that is
+not enforced is worse than a smaller one that is.
+
+Every host denies filesystem access by default, confines a bot to its own
+workspace plus exactly the paths the owner selected, and confines network access
+to a single server-managed proxy. Those are real, enforced properties.
+
+Grant binding is not race-free. The host binds a selected path at launch rather
+than to a filesystem object, so a narrow window exists between validating a
+selection and starting the process against it. Robokura records the target's
+identity, re-checks it from inside the sandbox immediately before the agent
+starts, and refuses the launch if it changed. The worst case of losing that race
+is access to exactly one unintended file, not general host access, because the
+deny side is authoritative everywhere.
+
+On macOS the boundary defends against a bot reaching further than it was given,
+not against a determined attacker controlling the model and its tools. macOS
+sandboxing is known to be escapable by a process inside the boundary, and it
+allows reading metadata such as existence and size for arbitrary host paths.
+The app therefore reports macOS execution as limited rather than full, and the
+product does not describe it as a defence against a hostile agent. Its network
+confinement, by contrast, is enforced by the kernel and is strong.
+
+Windows local execution depends on one unanswered question: whether the
+operating system can grant a process access to a single individual file, with
+read and write, without modifying access control on the host. If it cannot,
+Windows servers manage and pair but do not run bots, and the app says so plainly
+rather than silently widening a file grant to its parent directory.
 
 ### Selecting paths on the connected server
 
@@ -416,6 +534,24 @@ bot's saved sessions is useful. Group-chat membership does not share browser
 profiles. For a remote server, the app provides the view and control path to the
 browser running on that server.
 
+Browser control is not part of the first release. The capability key exists in
+the policy from the start so a browser grant can be expressed and refused, but no
+browser is installed, launched, or exposed. Shipping a browser-managed runtime,
+per-bot profile storage, and a remote-control transport alongside per-host
+sandbox validation would put the first release at risk, and the plan already
+places browser control after the core workflow.
+
+Two constraints are recorded now because retrofitting them is expensive. The
+browser runs **outside** the per-run sandbox, on its own boundary, because a
+persistent profile cannot coexist with a per-run immutable filesystem policy and
+because a browser's process tree and memory footprint make per-run containment
+proof much weaker than for a single agent process. And the browser's profile
+directory must already be excluded from backups, since site cookies and sessions
+are secrets that are host-specific and must be re-established by signing in
+again. Remote viewing relies on an experimental protocol surface while remote
+input dispatch does not, so if browser control is brought forward, owner control
+should arrive before owner viewing.
+
 Browser access remains a separate capability from agent-provider network
 access. This decision describes the intended experience; browser automation,
 remote viewing, and host enforcement still need technical design.
@@ -473,9 +609,32 @@ control.
 
 For an unmentioned message, invite all participating bots to decide whether
 they have a useful response; a bot may abstain without posting. An explicit
-mention invites only the named bot or bots. Count every bot turn, including
-handoffs, against a configurable per-run limit that starts at eight. At the
-limit, pause the run and let the owner continue or end it.
+mention invites only the named bot or bots.
+
+The turn limit is a **group-chat control**, not a general run limit. It applies
+when a coordinating run exists, starts at eight, and counts every bot turn
+including handoffs. At the limit the coordinating run pauses for the owner to
+extend it or end it; reaching the limit never auto-continues. The limit belongs to
+the coordinating run, so it is shared across the whole conversation rather than
+reset per bot.
+
+A normal owner-and-bot conversation has **no** turn budget. There is nothing to
+bound: one bot takes one turn at a time and the owner is present to stop it. The
+budget exists because a group thread can keep itself going without the owner
+saying anything, and unbounded autonomy is what the limit is there to prevent.
+Confusing the two would put an arbitrary pause in front of every ordinary
+conversation.
+
+Abstaining needs a product answer because the protocol has none: an agent's stop
+reason has no "nothing to add" value. Provide an explicit decline tool so a bot
+can say nothing on purpose, record a reason, and still avoid posting. Fall back
+to a client-metadata flag, which the protocol reserves for exactly this kind of
+extension, and only then to inferring it from a turn that ended with no new
+message. Abstention never appears in the transcript as a message.
+
+Bot-to-bot conversations follow the same idea for identity: one conversation per
+ordered pair of bots, created on the first handoff and reused for the life of the
+pair, which keeps the retention rule simple.
 
 ### Routine approval decision
 
@@ -597,6 +756,28 @@ Exclude agent-provider credentials from backups and exports. After restoring a
 server, the owner authenticates its agents again. Validate that the server can
 separate credentials from other agent data so backups and exports can omit them.
 
+Credential exclusion must be structural rather than procedural, because agents
+cannot be relied on to keep credentials out of reach. Several published agents
+read a dotenv file from the working directory and its parents, at least one
+silently falls back from the operating-system credential store to a plaintext
+file when that store is unavailable, and at least one stores a credential class
+outside the directory its documented configuration override relocates. A bot
+that writes a token into its own workspace has therefore placed it inside the
+backup set, and no server-side secret handling prevents that.
+
+So each work run gets a fresh ephemeral home and configuration directory that
+disappear with the run; an agent that must persist a refreshable login is given
+a per-agent credential location that lives outside the backup set; a declared
+exclusion manifest names every excluded path with a reason; and before a backup
+writes anything, a content scan checks candidate files for credential shapes. If
+a credential-shaped file is found inside a bot workspace the **backup fails**,
+naming the workspace-relative path and the shape that matched but never the
+value. The owner then either tells the bot to move the file or adds an explicit
+recorded exclusion. There is no force option: silently including leaks a
+credential, and silently dropping leaves the backup's copy of the workspace
+diverging from the live one. A backup that fails is recoverable; a leaked
+credential is not.
+
 ### Backup and export scope decision
 
 The full product includes both restorable server backups and readable exports.
@@ -624,14 +805,90 @@ memories, and paused routines that will be added. Import only after the owner
 confirms.
 
 Use a versioned JSON bundle for machine-readable exports. Keep its format
-versioned independently from the server database schema. The exact bundle
-layout remains to be decided.
+versioned independently from the server database schema.
 
 ### Backup encryption decision
 
 Keep portable full backups unencrypted. Include version and integrity metadata,
 and validate the backup before restoring it. Agent-provider credentials remain
-excluded.
+excluded. Encryption keys would have to be backed up alongside the data or
+delivered out of band, which reintroduces the credential custody problem the
+exclusion rules exist to remove; owners who need encryption should place the
+backup on an encrypted volume.
+
+### Backup and export bundle layout
+
+A full backup is a single streamed archive with its manifest as the first entry,
+a consistent snapshot of the database, per-bot workspaces, the skill library, and
+immutable attachment bytes. Installed agents are recorded as manifests carrying a
+pinned version and integrity hash rather than as binaries, because the plan
+already requires restore to reinstall agents for the target server rather than
+assume the original host's binaries run there. The manifest carries the bundle
+format version, product and schema versions, server identity, creation time,
+source platform, per-entry size and digest, the exclusion list with reasons, and
+an integrity block.
+
+Two exclusions go beyond the credentials already named. **Command receipts are
+excluded and purged from the restored copy**, because otherwise a restored
+server would answer a retried command with the *previous* server's recorded
+outcome, which is a correctness bug rather than a privacy one. **Stored external
+agent session identifiers are cleared on restore**, because such an identifier
+only means something to an agent installation holding the matching session on
+disk, and restoring it onto a reinstalled agent produces a confusing restore
+failure rather than a working session. **`work_runs.external_provider_ref` is
+cleared on restore for the same reason**: it is an idempotency key that only
+means something to the provider that issued it, and a restored server holding a
+stale key could retry an external action under a key that no longer applies.
+
+Restore validates the whole bundle in a staging directory before touching the
+target, then swaps by atomic rename of the data directory. That is what makes
+"leave the target unchanged if preparation fails" true by construction rather
+than by careful sequencing: every fallible step happens in staging, and a
+pre-restore backup of the existing server is required first. Restoring onto a
+different operating system works, with three adjustments: agents are reinstalled
+at their pinned versions resolved for the destination platform, the owner is
+told that workspace contents may include host-specific files, and site logins
+must be redone because browser profiles were never in the bundle.
+
+A capability verdict is a **host fact, not data**, and it must never survive a
+restore. `server_metadata.capability_report_json`, `capability_revision`, and
+`capabilities_probed_at` all live in the database, and the database is in the
+bundle, so restoring a bundle onto a different host would otherwise carry over a
+verdict computed on the machine the bundle came from. A Linux bundle restored
+onto Linux with no delegated cgroup would claim local execution is available when
+it is not — exactly the failure the capability report exists to prevent. Server
+identity and every other `server_metadata` field are preserved as data; those
+three are not.
+
+Therefore, in the restored copy:
+
+- `capability_report_json` is cleared to an empty report and `capabilities_probed_at`
+  to null. `capability_revision` resets to `0`.
+- `execution_status` is written as `checking` and no bot is launchable until a
+  full capability re-probe has run on the destination host.
+- The app shows every restored bot as unavailable with a reason naming an
+  unprobed host, rather than as ready-to-run, so nothing looks executable that
+  isn't.
+- The probe runs before the first launch is accepted and completes before the
+  app reports the server as ready for bot work. If the destination host fails a
+  required check, bots stay unavailable with that check's `reason_code`; server
+  management, pairing, and remote connection all keep working, because a
+  capability gap is never taken to mean the server is down.
+
+Restoring onto the same host with the same backend therefore completes quickly
+and simply re-confirms the report. It is restoring across a platform boundary
+where this matters, and that is precisely the case the plain reading of "the
+database is in the bundle" gets wrong.
+
+A readable export is a separate artifact from a full backup: a versioned
+machine-readable document plus Markdown renderings, carrying selected bot
+profiles, their conversations, files, memories, and routines. Each conversation
+is exported once even when several selected bots participated. Participants whose
+profiles were not selected are preserved as historical references with their
+names and messages intact and no bot profile. Import mints fresh identifiers for
+every record, adjusts colliding names deterministically rather than overwriting,
+forces imported routines to paused, and shows a preview of everything that will
+be added before the owner confirms.
 
 ### Restore behavior decision
 
@@ -645,13 +902,10 @@ unchanged.
 
 ### Data lifecycle decisions still open
 
-- Validate that agent credentials can be excluded while restoring agent
-  configuration and bot data.
-
-### Greenfield start
-
-The new server starts with an empty store. There is no migration or compatibility
-path from the earlier product model.
+- Validate on real hosts that agent credentials stay out of backups while agent
+  configuration and bot data restore normally, including the case where an agent
+  wrote a token into its own workspace and the pre-backup scan refuses the
+  backup.
 
 ## Agent lifecycle design
 
@@ -700,6 +954,29 @@ interaction with a server-side desktop and offers no compatible path.
 ACP's terminal method asks the client to run the configured agent interactively,
 while the protocol-driven method only specifies an authenticate request;
 agents may have different login UX.
+
+Rank the flows rather than treating authentication as one thing. **Browser-based
+sign-in relayed to the owner's own machine is the preferred headless path**: ACP
+lets an agent hand the client an out-of-band URL that the client opens, and
+requires that a credential obtained this way never travel back over the protocol
+or enter model context. That combination is exactly what a headless server
+needs, because the browser lives on the owner's computer while the credential
+stays on the server. Below it, **device-code and paste-the-code flows** are
+supported wherever the agent offers them. **Terminal authentication** is
+supported through the relayed terminal and is the fallback for interactive
+command-line logins. **Provider environment credentials** are preferred where
+documented, because they need no agent-managed state and work with an ephemeral
+home directory. **A flow that needs a browser on the server host** is
+unsupported: there is no way to proxy it without granting a browser capability.
+
+One consequence deserves stating: a base-URL override is a policy hole, not a
+convenience, because it changes where traffic goes. It is supported only when
+Robokura resolves the address itself as a checked allowlist entry, never when it
+comes from agent- or user-supplied text inside a run. And because several
+agents require authentication before they will accept a new session at all, a
+remote server cannot validate an agent's session-restore path until the owner
+has authenticated once; until then the agent's restore capability is recorded as
+unverified rather than supported.
 
 Treat installation, authentication, configuration, bot assignment, update, and
 removal as separate actions. An update should not silently interrupt active
@@ -785,13 +1062,21 @@ client first fetches the current bot and conversation state, then resumes the
 live event stream. Persist enough structured agent activity to rebuild the
 conversation view without flattening tool events into prose.
 
-## Replacement approach
+## Implementation approach
 
-Start the product implementation from zero against the decisions in this plan.
-Do not carry over the old domain model, persistence model, UI, or product
-behavior. Build the server and app around the new boundaries. The repository is
-the working location for this new implementation; the earlier product is not
-an input or compatibility target.
+Build from zero against the decisions in this plan. The domain model, the
+persistence model, the API surface, and the user interface are all designed
+here, in the order given by the work sequence below. Nothing in this repository
+implements Robokura yet, so these documents are the only specification: where an
+implementation detail is undecided, resolve it by following the decisions and
+boundaries recorded in them rather than by seeking an existing implementation to
+copy.
+
+The server schema begins at version one, migrations are numbered and
+forward-only from `0001`, and no compatibility surface is carried. This is why
+the architecture describes a migration runner with checksum enforcement rather
+than an upgrade path, and why several sections state a single correct design
+instead of listing alternatives to be chosen between later.
 
 ## Work sequence
 
@@ -802,11 +1087,61 @@ an input or compatibility target.
    conversations, turns, and structured activity.
 5. Build and validate the server and client foundations independently.
 6. Connect the GPUI app to the local server and complete the initial slice.
-7. Add VPS deployment and remote connection guidance after local operation is
-   reliable.
+7. Build the guided Linux installer for both VPS and desktop hosts, including
+   host preparation and the delegated-cgroup service setup, and add remote
+   connection guidance. This is a first-release deliverable rather than
+   follow-on documentation, because Linux is a first-release host.
+
+Three experiments gate the platform scope and run before the bulk of the
+implementation rather than alongside it, because their answers change which
+hosts ship:
+
+1. **Windows single-file grants.** Whether the Windows host can grant one
+   individual file, read and write, without modifying host access control. No
+   alternative avoids DACL mutation, so a negative answer removes Windows local
+   execution from the first release.
+2. **The containment guardian.** Whether it can reap a child process that has
+   started its own session, on every supported host. This is the probe the whole
+   revocation guarantee rests on, and on Linux it is also a deployment question,
+   not only a code question: the cgroup v2 subtree the guardian drains must be
+   **delegated and writable** by the server's service unit. A stock unit is not
+   delegated, the drain primitive is unavailable, and there is no fallback that
+   catches a `setsid`-escaping descendant — so a host without delegation would
+   have to run without local execution at all. Confirming delegation early is
+   cheaper than discovering it during VPS packaging.
+3. **The bootstrap channel on Windows.** Whether handle-list inheritance behaves
+   as designed, and specifically that a notifier spawned from the same window
+   cannot read the channel. The descriptor-3 convention is a hand-off across an
+   API that does not guarantee it, so it is verified rather than assumed.
+
+The first two change which hosts ship and must precede implementation. The third
+is a correctness risk to a security boundary and should be closed before the
+first release build, though it does not by itself change platform scope.
 
 ## Decisions still open
 
-- Resolve remaining behavior and implementation questions listed in the
-  relevant sections; they do not change the selected core bot workflow scope.
+- Answer the Windows single-file grant question and set the first release
+  platform scope from the result.
+- Confirm cgroup v2 delegation for the server's service unit on **each Linux
+  image and each desktop distribution** intended for release, and validate the
+  containment guardian against a detached child on every host. Linux VPS and
+  Linux desktop need separate confirmation: the delegated-subtree requirement is
+  what forces the Linux server to be service-installed rather than app-started.
+- Confirm which Linux VPS images actually ship a systemd version at or above the
+  250 floor. Some long-term-support images do not, and the floor is a hard
+  prerequisite for credential storage rather than a preference.
+- Decide the update mechanism. The Linux server runs as a system service holding
+  the delegated cgroup and the server identity, so an update has a defined
+  relationship to that service; the docs currently state neither manual
+  re-install nor an in-app trigger.
+- Qualify each published agent and version for provider egress and for the
+  authentication flows usable on a headless server.
+- Validate the bootstrap channel's handle inheritance on each host.
+- Publish the verified capability matrix and error-code catalogue as reviewable
+  artifacts.
+- Add the paged owner notification list and an owner-set notification retention
+  bound; both are required by the notifier that ships in the first release.
+- Design the later-feature contracts the current schema must anticipate:
+  connected-service broker, routine missed-run and time-zone behavior, memory
+  review, skill validation, and group-chat coordination.
 
